@@ -1,0 +1,12 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: severinos-car-api
+    env_file:
+      - .env
+    environment:
+      - PORT=8000
+    ports:
+      - "8000:8000"
