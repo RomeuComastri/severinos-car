@@ -1,0 +1,78 @@
+name: Release e Deploy PROD
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  versao:
+    name: Identificar versão
+    if: >-
+      github.event.pull_request.merged == true &&
+      (startsWith(github.event.pull_request.head.ref, 'release/') ||
+       startsWith(github.event.pull_request.head.ref, 'hotfix/'))
+    runs-on: ubuntu-latest
+    outputs:
+      versao: ${{ steps.versao.outputs.versao }}
+    steps:
+      - name: Extrair versão do nome da branch
+        id: versao
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          VERSAO="${BRANCH#*/}"
+          VERSAO="${VERSAO#v}"
+          if ! [[ "$VERSAO" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::A branch '$BRANCH' deve seguir o padrão release/X.Y.Z ou hotfix/X.Y.Z."
+            exit 1
+          fi
+          echo "versao=$VERSAO" >> "$GITHUB_OUTPUT"
+
+  testes:
+    needs: versao
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+  deploy:
+    name: Deploy no Render (PROD)
+    needs: testes
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Acionar deploy no Render
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_PROD }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::error::Secret RENDER_DEPLOY_HOOK_PROD não configurado."
+            exit 1
+          fi
+          curl --fail --silent --show-error -X POST "$DEPLOY_HOOK"
+
+  release:
+    name: Criar release no GitHub
+    needs: [versao, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Criar release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSAO: ${{ needs.versao.outputs.versao }}
+          COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          gh release create "v$VERSAO" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$COMMIT" \
+            --title "v$VERSAO" \
+            --generate-notes
