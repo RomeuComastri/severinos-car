@@ -268,19 +268,46 @@ pytest tests/health/test_health.py::test_health_retorna_status_ok
 
 ## Ambientes e deploy
 
-A mesma imagem Docker é publicada em dois serviços no Render. O deploy é automático a cada
-merge na branch correspondente.
+A mesma imagem Docker é publicada em dois serviços no Render. O deploy é feito pelo GitHub
+Actions, somente após a aprovação dos testes.
 
-| Ambiente | Branch | Serviço no Render |
-|----------|--------|-------------------|
-| Homologação | `develop` | `severinos-car-hml` |
-| Produção | `main` | `severinos-car-prod` |
+| Ambiente | Branch | Serviço no Render | Publicado quando |
+|----------|--------|-------------------|------------------|
+| Homologação | `develop` | `hml-severinos-car` | Merge na `develop` |
+| Produção | `main` | `severinos-car` | Merge de `release/*` ou `hotfix/*` na `main` |
+
+| Ambiente | URL |
+|----------|-----|
+| Homologação | https://hml-severinos-car.onrender.com/docs |
+| Produção | https://severinos-car.onrender.com/docs |
 
 Variáveis configuradas em cada serviço: `DATABASE_URL` e `APP_NAME`. O Health Check Path dos
 serviços é `/health`.
 
 No plano gratuito do Render, o serviço hiberna após um período sem requisições. A primeira
 chamada após a hibernação pode levar até um minuto.
+
+### Pipelines (GitHub Actions)
+
+| Workflow | Gatilho | Etapas |
+|----------|---------|--------|
+| `ci.yml` | Pull Request para `develop` ou `main` | Executa os testes |
+| `deploy-hml.yml` | Push (merge) na `develop` | Testes, deploy em homologação |
+| `release-prod.yml` | Merge de `release/X.Y.Z` ou `hotfix/X.Y.Z` na `main` | Testes, deploy em produção, criação da release `vX.Y.Z` no GitHub |
+
+Se os testes falharem, o deploy não é executado e a versão anterior permanece no ar. A versão da
+release é obtida do nome da branch: `release/1.2.0` gera a tag `v1.2.0`, com notas geradas a
+partir dos Pull Requests incluídos.
+
+### Configuração inicial
+
+1. No Render, criar os dois Web Services (runtime Docker), cada um apontando para sua branch,
+   com as variáveis de ambiente, o Health Check Path `/health` e o **Auto-Deploy desativado**.
+2. Copiar o **Deploy Hook** de cada serviço (Settings do serviço no Render).
+3. No GitHub, em **Settings > Secrets and variables > Actions**, cadastrar os secrets
+   `RENDER_DEPLOY_HOOK_HML` e `RENDER_DEPLOY_HOOK_PROD`.
+4. Recomendado: em **Settings > Branches**, proteger `develop` e `main` exigindo Pull Request e
+   a aprovação do check **Testes automatizados**.
 
 ## Fluxo de trabalho
 
@@ -297,9 +324,11 @@ chamada após a hibernação pode levar até um minuto.
 1. Crie a branch do card a partir de `develop`: `git checkout -b feature/nome-do-card develop`.
 2. Desenvolva a funcionalidade com seus testes e garanta que `pytest` passa localmente.
 3. Abra um Pull Request para `develop`.
-4. Para publicar em produção, crie `release/x.y.z` a partir de `develop`, abra um Pull Request
-   para `main` e, após o merge, integre a release de volta em `develop`.
-5. Correções urgentes partem de `main` em `hotfix/*` e são integradas em `main` e `develop`.
+4. Após o merge, a funcionalidade é publicada automaticamente em homologação.
+5. Para publicar em produção, crie `release/X.Y.Z` a partir de `develop` e abra um Pull Request
+   para `main`. Após o merge, a API é publicada em produção e a release `vX.Y.Z` é criada.
+   Se houver ajustes na branch de release, integre-os de volta em `develop`.
+6. Correções urgentes partem de `main` em `hotfix/X.Y.Z` e são integradas em `main` e `develop`.
 
 ### Mensagens de commit
 

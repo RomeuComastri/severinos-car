@@ -1,0 +1,32 @@
+name: Deploy HML
+
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-hml
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy no Render (HML)
+    needs: testes
+    runs-on: ubuntu-latest
+    environment: hml
+    steps:
+      - name: Acionar deploy no Render
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_HML }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::error::Secret RENDER_DEPLOY_HOOK_HML não configurado."
+            exit 1
+          fi
+          curl --fail --silent --show-error -X POST "$DEPLOY_HOOK"
