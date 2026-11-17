@@ -15,7 +15,10 @@ com Gitflow.
 - [Pré-requisitos](#pré-requisitos)
 - [Configuração](#configuração)
 - [Executando localmente](#executando-localmente)
+- [Banco de dados](#banco-de-dados)
+- [Criando usuários](#criando-usuários)
 - [Executando com Docker](#executando-com-docker)
+- [Autenticação](#autenticação)
 - [Endpoints](#endpoints)
 - [Testes automatizados](#testes-automatizados)
 - [Ambientes e deploy](#ambientes-e-deploy)
@@ -54,14 +57,17 @@ severinos-car/
 ├── app/
 │   ├── core/
 │   │   ├── config.py          Leitura das variáveis de ambiente
-│   │   └── database.py        Conexão com o banco e sessão por requisição
+│   │   ├── database.py        Conexão com o banco e sessão por requisição
+│   │   └── security.py        Hash de senha (bcrypt) e geração/validação de JWT
 │   ├── modules/
 │   │   ├── health/            Verificação da API e do banco
-│   │   ├── auth/              Card 1
+│   │   ├── auth/              Card 1: login, proteção das rotas e criação de usuários
 │   │   ├── veiculos/          Card 2
 │   │   ├── compradores/       Card 3
 │   │   └── vendas/            Card 4
 │   └── main.py                Criação da aplicação e registro das rotas
+├── db/
+│   └── migrations/            Scripts SQL executados manualmente no Supabase
 ├── tests/
 │   ├── conftest.py            Fixtures compartilhadas
 │   ├── core/
@@ -88,6 +94,8 @@ seu módulo, o que reduz conflitos de merge.
 | `repository.py` | Consultas e gravações no banco. |
 
 Para ativar um módulo, descomente o import e o `include_router` correspondentes em `app/main.py`.
+Os módulos de negócio são registrados com `dependencies=[Depends(get_current_user)]`, o que faz
+todas as suas rotas exigirem login (veja [Autenticação](#autenticação)).
 
 ## Pré-requisitos
 
@@ -112,7 +120,18 @@ cp .env.example .env
 | Variável | Obrigatória | Descrição |
 |----------|-------------|-----------|
 | `DATABASE_URL` | Sim | Connection string do PostgreSQL no Supabase |
+| `JWT_SECRET_KEY` | Sim | Chave que assina os tokens de login. Sem ela, o login responde `503` |
 | `APP_NAME` | Não | Título exibido na documentação. Padrão: `Severinos Car API` |
+| `JWT_EXPIRE_MINUTES` | Não | Validade do token, em minutos. Padrão: `30` |
+
+Para gerar a `JWT_SECRET_KEY`:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+Use uma chave diferente em cada ambiente. Trocar a chave invalida todos os tokens emitidos,
+o que obriga todos os usuários a fazer login novamente.
 
 ### Obtendo a `DATABASE_URL`
 
@@ -155,7 +174,10 @@ pip install -r requirements.txt
 
 **4. Configure o `.env`** conforme a seção [Configuração](#configuração).
 
-**5. Inicie a API**
+**5. Prepare o banco** (apenas na primeira vez): execute as migrações e crie um usuário, conforme
+[Banco de dados](#banco-de-dados) e [Criando usuários](#criando-usuários).
+
+**6. Inicie a API**
 
 ```bash
 uvicorn app.main:app --reload
@@ -172,6 +194,43 @@ http://localhost:8000/health/db. A resposta esperada é `{"status": "ok", "datab
 
 O `--reload` reinicia a API quando arquivos `.py` são alterados, mas não quando o `.env` muda.
 Após editar o `.env`, pare a API com `Ctrl+C` e inicie novamente.
+
+## Banco de dados
+
+As tabelas são criadas por scripts SQL versionados em `db/migrations/`, executados manualmente no
+Supabase em **SQL Editor > New query**. Cada migração tem um script de rollback correspondente.
+
+| Ordem | Script | O que faz | Rollback |
+|-------|--------|-----------|----------|
+| 001 | `001_cria_tabela_usuarios.sql` | Cria a tabela `usuarios` com e-mail único e RLS habilitado | `001_cria_tabela_usuarios_rollback.sql` |
+
+Os scripts usam `IF NOT EXISTS` e podem ser executados mais de uma vez. Execute-os em cada
+projeto do Supabase usado pelos ambientes.
+
+O RLS (Row Level Security) bloqueia o acesso à tabela pela API REST pública do Supabase, que usa
+a chave `anon`. A nossa API conecta com o usuário `postgres` e não é afetada.
+
+Ao criar ou alterar um model em `app/modules/*/models.py`, crie um novo script numerado
+(`002_...sql`) com o rollback correspondente.
+
+## Criando usuários
+
+Não há rota de cadastro na API. Os usuários são criados por um comando de terminal, que grava no
+banco configurado na `DATABASE_URL` do `.env`:
+
+```bash
+python -m app.modules.auth.cli criar-usuario --nome "João Silva" --email joao@loja.com
+```
+
+A senha é pedida duas vezes, sem aparecer na tela. Regras:
+
+- O e-mail precisa ser válido e não pode estar cadastrado. É salvo em letras minúsculas.
+- A senha precisa ter no mínimo 8 caracteres e no máximo 72 bytes (limite do bcrypt).
+- A senha é armazenada apenas como hash bcrypt, nunca em texto puro.
+
+Para desativar um usuário sem apagá-lo, execute no SQL Editor
+`UPDATE usuarios SET ativo = false WHERE email = 'joao@loja.com';`. Ele perde o acesso
+imediatamente, inclusive com tokens já emitidos.
 
 ## Executando com Docker
 
@@ -191,15 +250,47 @@ A imagem contém apenas o código da aplicação e suas dependências. O `.env` 
 imagem: localmente ele é carregado pelo Docker Compose e, no Render, as variáveis são definidas
 no painel do serviço. A porta é lida da variável `PORT`, definida automaticamente pelo Render.
 
+## Autenticação
+
+A API usa login com e-mail e senha e token JWT (`Bearer`), válido por 30 minutos.
+
+1. Faça login em `POST /auth/login` e copie o `access_token` da resposta.
+2. Envie o token nas demais requisições, no header `Authorization: Bearer <token>`.
+3. Quando o token expirar, faça login novamente. Não há refresh token.
+
+No Swagger (`/docs`), clique em **Authorize**, cole o token e confirme. As requisições feitas
+pela página passam a enviar o header automaticamente.
+
+**Rotas públicas:** `/`, `/health`, `/health/db`, `/docs`, `/redoc` e `POST /auth/login`. Todas
+as demais exigem token. Qualquer falha de autenticação (token ausente, inválido, expirado ou de
+usuário desativado) retorna:
+
+```json
+// 401
+{ "detail": "Não autenticado." }
+```
+
+Para proteger um novo módulo, registre o router em `app/main.py` com a dependência de
+autenticação. Para obter o usuário logado dentro de uma rota, declare-o como parâmetro:
+
+```python
+app.include_router(veiculos_router, dependencies=[Depends(get_current_user)])
+
+@router.get("/minha-rota")
+def minha_rota(usuario: Usuario = Depends(get_current_user)): ...
+```
+
 ## Endpoints
 
 A documentação completa, com possibilidade de testar as requisições, está disponível no Swagger
 (`/docs`).
 
-| Método | Rota | Descrição | Respostas |
-|--------|------|-----------|-----------|
-| `GET` | `/health` | Verifica se a API está no ar | `200` |
-| `GET` | `/health/db` | Verifica a conexão com o banco de dados | `200`, `503` |
+| Método | Rota | Descrição | Autenticação | Respostas |
+|--------|------|-----------|--------------|-----------|
+| `GET` | `/health` | Verifica se a API está no ar | Pública | `200` |
+| `GET` | `/health/db` | Verifica a conexão com o banco de dados | Pública | `200`, `503` |
+| `POST` | `/auth/login` | Autentica o usuário e devolve um token JWT | Pública | `200`, `401`, `422`, `503` |
+| `GET` | `/auth/me` | Retorna os dados do usuário logado | Token | `200`, `401` |
 
 **Exemplos de resposta**
 
@@ -221,6 +312,25 @@ A documentação completa, com possibilidade de testar as requisições, está d
 { "status": "error", "database": "unavailable" }
 ```
 
+`POST /auth/login`
+
+```json
+// requisição
+{ "email": "joao@loja.com", "senha": "minhaSenha123" }
+
+// 200
+{ "access_token": "eyJhbGciOiJIUzI1NiIs...", "token_type": "bearer", "expires_in": 1800 }
+
+// 401: e-mail inexistente, senha incorreta ou usuário desativado
+{ "detail": "E-mail ou senha inválidos." }
+```
+
+`GET /auth/me` com `Authorization: Bearer <token>` (200)
+
+```json
+{ "id": 1, "nome": "João Silva", "email": "joao@loja.com" }
+```
+
 ## Testes automatizados
 
 ### Estratégia
@@ -239,6 +349,10 @@ A documentação completa, com possibilidade de testar as requisições, está d
 |---------|-----------|
 | `db_session` | Sessão SQLite em memória, recriada a cada teste |
 | `client` | Cliente HTTP da API já usando o `db_session` no lugar do banco real |
+| `usuario_cadastrado` | Usuário ativo `joao@loja.com`, com a senha `SENHA_DE_TESTE` |
+
+O `conftest.py` define uma `JWT_SECRET_KEY` própria para os testes antes de importar a API.
+Por isso os testes não dependem do `.env` nem da chave real.
 
 ### Executando
 
@@ -265,6 +379,8 @@ pytest tests/health/test_health.py::test_health_retorna_status_ok
 | health | `test_health_retorna_status_ok` | `GET /health` | Status 200 e `status: ok` |
 | health | `test_health_db_retorna_conectado_quando_banco_responde` | `GET /health/db` com banco disponível | Status 200 e `database: connected` |
 | health | `test_health_db_retorna_503_quando_banco_indisponivel` | `GET /health/db` com banco indisponível | Status 503 e `database: unavailable` |
+| auth | `test_login_valido_retorna_token` | `POST /auth/login` com e-mail e senha corretos | Status 200 e `access_token` preenchido |
+| auth | `test_senha_incorreta_retorna_401` | `POST /auth/login` com senha incorreta | Status 401 e `E-mail ou senha inválidos.` |
 
 ## Ambientes e deploy
 
@@ -281,7 +397,8 @@ Actions, somente após a aprovação dos testes.
 | Homologação | https://hml-severinos-car.onrender.com/docs |
 | Produção | https://severinos-car.onrender.com/docs |
 
-Variáveis configuradas em cada serviço: `DATABASE_URL` e `APP_NAME`. O Health Check Path dos
+Variáveis configuradas em cada serviço: `DATABASE_URL`, `JWT_SECRET_KEY` (diferente em cada
+ambiente) e `APP_NAME`. O Health Check Path dos
 serviços é `/health`.
 
 No plano gratuito do Render, o serviço hiberna após um período sem requisições. A primeira
@@ -347,7 +464,8 @@ O projeto segue o padrão [Conventional Commits](https://www.conventionalcommits
 
 1. Crie os arquivos do módulo em `app/modules/<modulo>/` seguindo a
    [organização de um módulo](#organização-de-um-módulo).
-2. Registre o router em `app/main.py`.
+2. Registre o router em `app/main.py` com `dependencies=[Depends(get_current_user)]`, para que
+   suas rotas exijam login. Se o módulo tiver tabelas, crie o script em `db/migrations/`.
 3. Escreva os testes em `tests/<modulo>/`, usando as fixtures `client` e `db_session`.
 4. Atualize as tabelas de [Endpoints](#endpoints) e [Casos de teste](#casos-de-teste) deste README.
 
@@ -362,3 +480,7 @@ O projeto segue o padrão [Conventional Commits](https://www.conventionalcommits
 | Alteração no `.env` não surte efeito | API não foi reiniciada | Pare com `Ctrl+C` e inicie novamente |
 | Erro ao ativar o `.venv` no PowerShell | Execução de scripts bloqueada | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | Porta 8000 em uso | API local e Docker rodando juntos | Encerre uma das execuções |
+| Login retorna `503 Autenticação indisponível` | `JWT_SECRET_KEY` não configurada | Defina a variável no `.env` ou no Render e reinicie |
+| Login retorna `401` com a senha correta | Usuário desativado ou e-mail diferente do cadastrado | Confira a tabela `usuarios` no Supabase |
+| Todas as rotas protegidas retornam `401` | Token expirado (30 min), header sem `Bearer ` ou chave trocada | Faça login novamente |
+| `relation "usuarios" does not exist` | Migração não executada no banco | Execute `db/migrations/001_cria_tabela_usuarios.sql` |
