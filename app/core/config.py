@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     app_name: str = "Severinos Car API"
     database_url: str | None = None
 
+    jwt_secret_key: str | None = None
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 30
+
     @property
     def sqlalchemy_database_url(self) -> str | None:
         """Converte a URL do Supabase para o driver psycopg 3 usado pelo SQLAlchemy."""
