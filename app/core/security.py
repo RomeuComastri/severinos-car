@@ -6,7 +6,6 @@ import jwt
 
 from app.core.config import get_settings
 
-# O bcrypt só considera os primeiros 72 bytes da senha (e a versão 5.x lança erro acima disso).
 BCRYPT_MAX_BYTES = 72
 
 
@@ -19,7 +18,7 @@ class SenhaMuitoLongaError(ValueError):
 
 
 class TokenInvalidoError(Exception):
-    """Token ausente de campos obrigatórios, com assinatura inválida, expirado ou mal formado."""
+    pass
 
 
 def gerar_hash_senha(senha: str) -> str:
@@ -42,11 +41,7 @@ def _hash_ficticio() -> str:
 
 
 def simular_verificacao_de_senha() -> None:
-    """Gasta o mesmo tempo de uma verificação real.
-
-    Usado quando o e-mail não existe, para que o tempo de resposta não revele
-    quais e-mails estão cadastrados (timing attack).
-    """
+    """Equaliza o tempo de resposta quando o e-mail não existe, evitando revelar e-mails cadastrados."""
     verificar_senha("senha-qualquer", _hash_ficticio())
 
 

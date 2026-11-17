@@ -13,10 +13,7 @@ SENHA_MIN_CARACTERES = 8
 
 
 class CredenciaisInvalidasError(Exception):
-    """E-mail inexistente, senha incorreta ou usuário inativo.
-
-    Os três casos usam o mesmo erro de propósito: a API não deve revelar qual deles ocorreu.
-    """
+    """Usado para e-mail inexistente, senha incorreta e usuário inativo, sem revelar qual ocorreu."""
 
 
 class EmailJaCadastradoError(Exception):
@@ -32,7 +29,6 @@ def normalizar_email(email: str) -> str:
 
 
 def autenticar(db: Session, email: str, senha: str) -> str:
-    """Valida as credenciais e devolve um access token JWT."""
     usuario = repository.buscar_por_email(db, normalizar_email(email))
 
     if usuario is None:

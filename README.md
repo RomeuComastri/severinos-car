@@ -17,6 +17,7 @@ com Gitflow.
 - [Executando localmente](#executando-localmente)
 - [Banco de dados](#banco-de-dados)
 - [Criando usuários](#criando-usuários)
+- [Imagens dos veículos](#imagens-dos-veículos)
 - [Executando com Docker](#executando-com-docker)
 - [Autenticação](#autenticação)
 - [Endpoints](#endpoints)
@@ -33,7 +34,7 @@ Cada funcionalidade corresponde a um card do Kanban e a um módulo independente 
 |------|----------------|--------|--------|
 | 0 | Setup do projeto | `app/core` | `feature/setup-projeto` |
 | 1 | Login de usuário com token JWT | `app/modules/auth` | `feature/login-jwt` |
-| 2 | Cadastro de veículos | `app/modules/veiculos` | `feature/crud-veiculos` |
+| 2 | Cadastro de veículos com imagem | `app/modules/veiculos` | `feature/crud-veiculos` |
 | 3 | Cadastro de compradores | `app/modules/compradores` | `feature/crud-compradores` |
 | 4 | Registro de venda de veículo | `app/modules/vendas` | `feature/crud-vendas` |
 
@@ -46,6 +47,7 @@ Cada funcionalidade corresponde a um card do Kanban e a um módulo independente 
 | Servidor ASGI | Uvicorn |
 | ORM | SQLAlchemy 2 |
 | Banco de dados | PostgreSQL hospedado no Supabase |
+| Armazenamento de imagens | Supabase Storage |
 | Testes | Pytest |
 | Container | Docker e Docker Compose |
 | Hospedagem | Render |
@@ -58,11 +60,12 @@ severinos-car/
 │   ├── core/
 │   │   ├── config.py          Leitura das variáveis de ambiente
 │   │   ├── database.py        Conexão com o banco e sessão por requisição
-│   │   └── security.py        Hash de senha (bcrypt) e geração/validação de JWT
+│   │   ├── security.py        Hash de senha (bcrypt) e geração/validação de JWT
+│   │   └── storage.py         Envio e remoção de arquivos no Supabase Storage
 │   ├── modules/
 │   │   ├── health/            Verificação da API e do banco
 │   │   ├── auth/              Card 1: login, proteção das rotas e criação de usuários
-│   │   ├── veiculos/          Card 2
+│   │   ├── veiculos/          Card 2: CRUD de veículos e imagem
 │   │   ├── compradores/       Card 3
 │   │   └── vendas/            Card 4
 │   └── main.py                Criação da aplicação e registro das rotas
@@ -123,6 +126,9 @@ cp .env.example .env
 | `JWT_SECRET_KEY` | Sim | Chave que assina os tokens de login. Sem ela, o login responde `503` |
 | `APP_NAME` | Não | Título exibido na documentação. Padrão: `Severinos Car API` |
 | `JWT_EXPIRE_MINUTES` | Não | Validade do token, em minutos. Padrão: `30` |
+| `SUPABASE_URL` | Para imagens | URL do projeto no Supabase (`https://<id>.supabase.co`) |
+| `SUPABASE_SECRET_KEY` | Para imagens | Secret key do projeto. Sem ela, o envio de imagens responde `503` |
+| `SUPABASE_STORAGE_BUCKET` | Não | Bucket das imagens dos veículos. Padrão: `veiculos` |
 
 Para gerar a `JWT_SECRET_KEY`:
 
@@ -203,6 +209,7 @@ Supabase em **SQL Editor > New query**. Cada migração tem um script de rollbac
 | Ordem | Script | O que faz | Rollback |
 |-------|--------|-----------|----------|
 | 001 | `001_cria_tabela_usuarios.sql` | Cria a tabela `usuarios` com e-mail único e RLS habilitado | `001_cria_tabela_usuarios_rollback.sql` |
+| 002 | `002_cria_tabela_veiculos.sql` | Cria a tabela `veiculos` com placa única, preço maior que zero e RLS habilitado | `002_cria_tabela_veiculos_rollback.sql` |
 
 Os scripts usam `IF NOT EXISTS` e podem ser executados mais de uma vez. Execute-os em cada
 projeto do Supabase usado pelos ambientes.
@@ -211,7 +218,7 @@ O RLS (Row Level Security) bloqueia o acesso à tabela pela API REST pública do
 a chave `anon`. A nossa API conecta com o usuário `postgres` e não é afetada.
 
 Ao criar ou alterar um model em `app/modules/*/models.py`, crie um novo script numerado
-(`002_...sql`) com o rollback correspondente.
+(`003_...sql`) com o rollback correspondente.
 
 ## Criando usuários
 
@@ -231,6 +238,27 @@ A senha é pedida duas vezes, sem aparecer na tela. Regras:
 Para desativar um usuário sem apagá-lo, execute no SQL Editor
 `UPDATE usuarios SET ativo = false WHERE email = 'joao@loja.com';`. Ele perde o acesso
 imediatamente, inclusive com tokens já emitidos.
+
+## Imagens dos veículos
+
+As imagens são armazenadas no Supabase Storage. O banco guarda apenas a URL pública da imagem,
+no campo `imagem_url` do veículo.
+
+**Configuração (uma vez por projeto do Supabase):**
+
+1. Em **Storage**, crie um bucket chamado `veiculos` e marque-o como **Public bucket**.
+2. Em **Project Settings > API Keys**, copie uma **Secret key** (`sb_secret_...`).
+3. Preencha `SUPABASE_URL` e `SUPABASE_SECRET_KEY` no `.env` e nos serviços do Render.
+
+A secret key dá acesso total ao projeto do Supabase. Ela deve existir apenas no `.env` e nas
+variáveis do Render, nunca no código.
+
+**Regras de envio:**
+
+- Formatos aceitos: JPEG, PNG e WEBP, identificados pelo conteúdo do arquivo e não pela extensão.
+- Tamanho máximo: 5 MB.
+- Cada veículo tem uma imagem. Ao enviar uma nova, a anterior é removida do Storage.
+- Ao excluir o veículo ou a imagem, o arquivo também é removido do Storage.
 
 ## Executando com Docker
 
@@ -291,6 +319,24 @@ A documentação completa, com possibilidade de testar as requisições, está d
 | `GET` | `/health/db` | Verifica a conexão com o banco de dados | Pública | `200`, `503` |
 | `POST` | `/auth/login` | Autentica o usuário e devolve um token JWT | Pública | `200`, `401`, `422`, `503` |
 | `GET` | `/auth/me` | Retorna os dados do usuário logado | Token | `200`, `401` |
+| `POST` | `/veiculos` | Cadastra um veículo | Token | `201`, `400`, `401`, `422` |
+| `GET` | `/veiculos` | Lista os veículos, com filtro opcional `?status=disponivel` ou `vendido` | Token | `200`, `401` |
+| `GET` | `/veiculos/{id}` | Busca um veículo pelo ID | Token | `200`, `401`, `404` |
+| `PUT` | `/veiculos/{id}` | Atualiza todos os dados de um veículo, inclusive o status | Token | `200`, `400`, `401`, `404`, `422` |
+| `DELETE` | `/veiculos/{id}` | Exclui um veículo que não foi vendido | Token | `204`, `400`, `401`, `404` |
+| `PUT` | `/veiculos/{id}/imagem` | Envia ou substitui a imagem (`multipart/form-data`, campo `arquivo`) | Token | `200`, `400`, `401`, `404`, `503` |
+| `DELETE` | `/veiculos/{id}/imagem` | Remove a imagem do veículo | Token | `204`, `401`, `404` |
+
+### Regras de negócio dos veículos
+
+| Regra | Resposta em caso de violação |
+|-------|------------------------------|
+| Placa obrigatória, no formato `ABC1234` ou Mercosul `ABC1D23` (salva em maiúsculas, sem traço) | `422` |
+| Placa única entre todos os veículos | `400` |
+| Ano entre 1900 e o ano atual + 1 | `422` |
+| Preço maior que zero | `422` |
+| Veículo novo é sempre cadastrado como `disponivel`, mesmo que outro status seja enviado | - |
+| Veículo com status `vendido` não pode ser excluído | `400` |
 
 **Exemplos de resposta**
 
@@ -331,6 +377,39 @@ A documentação completa, com possibilidade de testar as requisições, está d
 { "id": 1, "nome": "João Silva", "email": "joao@loja.com" }
 ```
 
+`POST /veiculos`
+
+```json
+// requisição
+{ "placa": "ABC1D23", "marca": "Volkswagen", "modelo": "Gol", "ano": 2022, "cor": "Prata", "preco": 55000.00 }
+
+// 201
+{
+  "id": 1, "placa": "ABC1D23", "marca": "Volkswagen", "modelo": "Gol", "ano": 2022, "cor": "Prata",
+  "preco": 55000.0, "status": "disponivel", "imagem_url": null, "criado_em": "2026-11-17T14:00:00Z"
+}
+
+// 400: placa já cadastrada
+{ "detail": "Já existe um veículo com a placa ABC1D23." }
+
+// 422: dados inválidos (um item por campo inválido)
+{ "detail": [{ "loc": ["body", "preco"], "msg": "Value error, O preço deve ser maior que zero.", "...": "..." }] }
+```
+
+`PUT /veiculos/{id}` exige todos os campos do cadastro e também o `status` (`disponivel` ou `vendido`).
+
+`DELETE /veiculos/{id}` (400, veículo vendido)
+
+```json
+{ "detail": "Não é possível excluir um veículo vendido." }
+```
+
+`GET /veiculos/{id}` (404)
+
+```json
+{ "detail": "Veículo não encontrado." }
+```
+
 ## Testes automatizados
 
 ### Estratégia
@@ -350,9 +429,13 @@ A documentação completa, com possibilidade de testar as requisições, está d
 | `db_session` | Sessão SQLite em memória, recriada a cada teste |
 | `client` | Cliente HTTP da API já usando o `db_session` no lugar do banco real |
 | `usuario_cadastrado` | Usuário ativo `joao@loja.com`, com a senha `SENHA_DE_TESTE` |
+| `auth_headers` | Header `Authorization` com um token válido do `usuario_cadastrado` |
+| `storage_fake` | Storage em memória que registra envios e remoções, usado no lugar do Supabase Storage |
+| `veiculo_cadastrado` | Veículo disponível de placa `ABC1D23` (em `tests/veiculos/conftest.py`) |
 
-O `conftest.py` define uma `JWT_SECRET_KEY` própria para os testes antes de importar a API.
-Por isso os testes não dependem do `.env` nem da chave real.
+O `conftest.py` define uma `JWT_SECRET_KEY` própria para os testes antes de importar a API, e o
+`client` usa o `storage_fake`. Por isso os testes não dependem do `.env`, da chave real nem do
+Supabase Storage.
 
 ### Executando
 
@@ -381,6 +464,34 @@ pytest tests/health/test_health.py::test_health_retorna_status_ok
 | health | `test_health_db_retorna_503_quando_banco_indisponivel` | `GET /health/db` com banco indisponível | Status 503 e `database: unavailable` |
 | auth | `test_login_valido_retorna_token` | `POST /auth/login` com e-mail e senha corretos | Status 200 e `access_token` preenchido |
 | auth | `test_senha_incorreta_retorna_401` | `POST /auth/login` com senha incorreta | Status 401 e `E-mail ou senha inválidos.` |
+| core | `test_chave_secreta_nova_vai_somente_no_header_apikey` | Secret key `sb_secret_...` | Chave apenas no header `apikey` |
+| core | `test_chave_legada_service_role_vai_tambem_no_header_authorization` | Chave legada (JWT) | Chave nos headers `apikey` e `Authorization` |
+| core | `test_converte_caminho_em_url_publica_e_vice_versa` | Caminho `1/foto.jpg` e URLs | URL pública correta e caminho extraído; `None` para URL externa |
+| core | `test_envio_sem_configuracao_lanca_erro` | Storage sem URL e chave | Exceção `StorageNotConfiguredError` |
+| veiculos | `test_cadastra_veiculo_valido` | `POST /veiculos` com placa `abc-1234` | Status 201 e placa salva como `ABC1234` |
+| veiculos | `test_veiculo_novo_nasce_disponivel_mesmo_com_status_informado` | `POST /veiculos` com `status: vendido` | Status 201 e `status: disponivel` |
+| veiculos | `test_rejeita_placa_duplicada` | `POST /veiculos` com placa já cadastrada | Status 400 e mensagem de placa duplicada |
+| veiculos | `test_rejeita_cadastro_sem_placa` | `POST /veiculos` sem o campo `placa` | Status 422 |
+| veiculos | `test_rejeita_placa_em_formato_invalido` (5 casos) | Placas vazia, curta, longa e fora do padrão | Status 422 e `Placa inválida` |
+| veiculos | `test_rejeita_ano_invalido` (2 casos) | Ano 1899 e ano atual + 2 | Status 422 e faixa de anos válida |
+| veiculos | `test_rejeita_preco_menor_ou_igual_a_zero` (2 casos) | Preço 0 e negativo | Status 422 e `O preço deve ser maior que zero.` |
+| veiculos | `test_lista_veiculos` | `GET /veiculos` com dois veículos | Status 200 e os dois veículos em ordem |
+| veiculos | `test_filtra_veiculos_por_status` | `GET /veiculos?status=vendido` | Somente o veículo vendido |
+| veiculos | `test_busca_veiculo_por_id` | `GET /veiculos/{id}` | Status 200 e os dados do veículo |
+| veiculos | `test_veiculo_inexistente_retorna_404` (3 casos) | `GET`, `PUT` e `DELETE` em `/veiculos/999` | Status 404 e `Veículo não encontrado.` |
+| veiculos | `test_atualiza_veiculo` | `PUT /veiculos/{id}` com cor, preço e status novos | Status 200 e dados atualizados |
+| veiculos | `test_atualizacao_rejeita_placa_de_outro_veiculo` | `PUT` com a placa de outro veículo | Status 400 e mensagem de placa duplicada |
+| veiculos | `test_exclui_veiculo_disponivel` | `DELETE /veiculos/{id}` | Status 204 e veículo não encontrado depois |
+| veiculos | `test_nao_exclui_veiculo_vendido` | `DELETE` em veículo vendido | Status 400 e veículo mantido |
+| veiculos | `test_rotas_de_veiculos_exigem_autenticacao` (7 casos) | Todas as rotas de veículos sem token | Status 401 e `Não autenticado.` |
+| veiculos | `test_envia_imagem_e_salva_a_url_no_veiculo` (3 casos) | Imagens JPEG, PNG e WEBP | Status 200 e `imagem_url` com a extensão do formato |
+| veiculos | `test_rejeita_arquivo_que_nao_e_imagem` | Arquivo PDF com extensão `.jpg` | Status 400 e nada enviado ao Storage |
+| veiculos | `test_rejeita_imagem_maior_que_5_mb` | Imagem acima de 5 MB | Status 400 e nada enviado ao Storage |
+| veiculos | `test_envio_de_imagem_para_veiculo_inexistente_retorna_404` | Imagem para `/veiculos/999` | Status 404 |
+| veiculos | `test_substituir_imagem_remove_a_anterior_do_storage` | Duas imagens seguidas | A primeira é removida do Storage |
+| veiculos | `test_remove_imagem_do_veiculo` | `DELETE /veiculos/{id}/imagem` | Status 204, `imagem_url` nula e arquivo removido |
+| veiculos | `test_excluir_veiculo_remove_a_imagem_do_storage` | `DELETE /veiculos/{id}` com imagem | Status 204 e arquivo removido |
+| veiculos | `test_envio_de_imagem_sem_storage_configurado_retorna_503` | Imagem sem `SUPABASE_URL` e chave | Status 503 e `Serviço de imagens indisponível.` |
 
 ## Ambientes e deploy
 
@@ -398,7 +509,7 @@ Actions, somente após a aprovação dos testes.
 | Produção | https://severinos-car.onrender.com/docs |
 
 Variáveis configuradas em cada serviço: `DATABASE_URL`, `JWT_SECRET_KEY` (diferente em cada
-ambiente) e `APP_NAME`. O Health Check Path dos
+ambiente), `SUPABASE_URL`, `SUPABASE_SECRET_KEY` e `APP_NAME`. O Health Check Path dos
 serviços é `/health`.
 
 No plano gratuito do Render, o serviço hiberna após um período sem requisições. A primeira
@@ -484,3 +595,6 @@ O projeto segue o padrão [Conventional Commits](https://www.conventionalcommits
 | Login retorna `401` com a senha correta | Usuário desativado ou e-mail diferente do cadastrado | Confira a tabela `usuarios` no Supabase |
 | Todas as rotas protegidas retornam `401` | Token expirado (30 min), header sem `Bearer ` ou chave trocada | Faça login novamente |
 | `relation "usuarios" does not exist` | Migração não executada no banco | Execute `db/migrations/001_cria_tabela_usuarios.sql` |
+| `relation "veiculos" does not exist` | Migração não executada no banco | Execute `db/migrations/002_cria_tabela_veiculos.sql` |
+| Envio de imagem retorna `503` | `SUPABASE_URL` ou `SUPABASE_SECRET_KEY` ausentes, chave inválida ou bucket inexistente | Confira as variáveis e o bucket `veiculos`; o motivo aparece no log da API |
+| Imagem enviada, mas a URL não abre | Bucket não está público | Em **Storage**, marque o bucket `veiculos` como **Public bucket** |

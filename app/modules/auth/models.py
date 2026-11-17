@@ -7,12 +7,6 @@ from app.core.database import Base
 
 
 class Usuario(Base):
-    """Funcionário da loja que pode acessar a API.
-
-    A tabela é criada no Supabase pelo script db/migrations/001_cria_tabela_usuarios.sql.
-    Qualquer mudança aqui precisa de um novo script de migração.
-    """
-
     __tablename__ = "usuarios"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

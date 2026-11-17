@@ -11,14 +11,10 @@ from app.modules.auth.models import Usuario
 
 logger = logging.getLogger(__name__)
 
-# auto_error=False: quando o header falta (ou não é "Bearer"), o FastAPI devolve None em vez de
-# responder sozinho. Assim garantimos o status 401 com a nossa mensagem.
 bearer_scheme = HTTPBearer(auto_error=False, description="Token obtido em POST /auth/login")
 
 
 def _nao_autorizado() -> HTTPException:
-    """Resposta padrão para qualquer falha de autenticação (sem token, token inválido ou expirado,
-    usuário inexistente ou desativado)."""
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Não autenticado.",
@@ -30,14 +26,6 @@ def get_current_user(
     credenciais: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> Usuario:
-    """Exige um token válido e devolve o usuário logado.
-
-    Uso em um módulo inteiro (em app/main.py):
-        app.include_router(veiculos_router, dependencies=[Depends(get_current_user)])
-
-    Uso em uma rota que precisa saber quem está logado:
-        def minha_rota(usuario: Usuario = Depends(get_current_user)): ...
-    """
     if credenciais is None:
         raise _nao_autorizado()
 

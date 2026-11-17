@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 30
 
+    supabase_url: str | None = None
+    supabase_secret_key: str | None = None
+    supabase_storage_bucket: str = "veiculos"
+
     @property
     def sqlalchemy_database_url(self) -> str | None:
         """Converte a URL do Supabase para o driver psycopg 3 usado pelo SQLAlchemy."""
