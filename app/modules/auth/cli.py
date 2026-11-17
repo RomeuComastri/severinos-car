@@ -1,10 +1,4 @@
-"""Comandos de terminal do módulo de autenticação.
-
-Criar um usuário (a senha é pedida de forma oculta, sem ficar no histórico do terminal):
-    python -m app.modules.auth.cli criar-usuario --nome "João Silva" --email joao@loja.com
-
-O comando grava no banco configurado em DATABASE_URL (arquivo .env).
-"""
+"""Uso: python -m app.modules.auth.cli criar-usuario --nome "João Silva" --email joao@loja.com"""
 
 import argparse
 import getpass
@@ -32,7 +26,6 @@ def criar_usuario(
     email: str,
     ler_senha: Callable[[str], str] = getpass.getpass,
 ) -> int:
-    """Pede a senha duas vezes e cria o usuário. Devolve 0 em caso de sucesso e 1 em caso de erro."""
     try:
         _validador_email.validate_python(email)
     except ValidationError:
