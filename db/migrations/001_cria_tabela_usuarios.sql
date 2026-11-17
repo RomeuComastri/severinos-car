@@ -14,7 +14,5 @@ CREATE TABLE IF NOT EXISTS public.usuarios (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_usuarios_email ON public.usuarios (email);
 
--- O Supabase expõe as tabelas do schema public em uma API REST acessível com a chave pública
--- (anon). Com RLS habilitado e nenhuma policy criada, essa API não consegue ler nem gravar
--- nesta tabela. A nossa API conecta com o usuário postgres, que não é afetado pelo RLS.
+-- RLS sem policies bloqueia a API REST pública do Supabase. A nossa API usa o usuário postgres.
 ALTER TABLE public.usuarios ENABLE ROW LEVEL SECURITY;
