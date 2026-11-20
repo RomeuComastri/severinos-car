@@ -210,6 +210,7 @@ Supabase em **SQL Editor > New query**. Cada migração tem um script de rollbac
 |-------|--------|-----------|----------|
 | 001 | `001_cria_tabela_usuarios.sql` | Cria a tabela `usuarios` com e-mail único e RLS habilitado | `001_cria_tabela_usuarios_rollback.sql` |
 | 002 | `002_cria_tabela_veiculos.sql` | Cria a tabela `veiculos` com placa única, preço maior que zero e RLS habilitado | `002_cria_tabela_veiculos_rollback.sql` |
+| 003 | `003_cria_tabela_compradores.sql` | Cria a tabela `compradores` com CPF único e RLS habilitado | `003_cria_tabela_compradores_rollback.sql` |
 
 Os scripts usam `IF NOT EXISTS` e podem ser executados mais de uma vez. Execute-os em cada
 projeto do Supabase usado pelos ambientes.
@@ -326,6 +327,11 @@ A documentação completa, com possibilidade de testar as requisições, está d
 | `DELETE` | `/veiculos/{id}` | Exclui um veículo que não foi vendido | Token | `204`, `400`, `401`, `404` |
 | `PUT` | `/veiculos/{id}/imagem` | Envia ou substitui a imagem (`multipart/form-data`, campo `arquivo`) | Token | `200`, `400`, `401`, `404`, `503` |
 | `DELETE` | `/veiculos/{id}/imagem` | Remove a imagem do veículo | Token | `204`, `401`, `404` |
+| `POST` | `/compradores` | Cadastra um comprador | Token | `201`, `400`, `401`, `422` |
+| `GET` | `/compradores` | Lista os compradores | Token | `200`, `401` |
+| `GET` | `/compradores/{id}` | Busca um comprador pelo ID | Token | `200`, `401`, `404` |
+| `PUT` | `/compradores/{id}` | Atualiza todos os dados de um comprador | Token | `200`, `400`, `401`, `404`, `422` |
+| `DELETE` | `/compradores/{id}` | Exclui um comprador que não possui vendas | Token | `204`, `400`, `401`, `404` |
 
 ### Regras de negócio dos veículos
 
@@ -410,6 +416,83 @@ A documentação completa, com possibilidade de testar as requisições, está d
 { "detail": "Veículo não encontrado." }
 ```
 
+### Regras de negócio dos compradores
+
+| Regra | Resposta em caso de violação |
+|-------|------------------------------|
+| Nome obrigatório, com até 100 caracteres | `422` |
+| CPF obrigatório e válido (11 dígitos e dígitos verificadores corretos). Aceita com ou sem pontuação e é salvo somente com dígitos | `422` |
+| E-mail obrigatório e válido. É salvo em letras minúsculas | `422` |
+| CPF único entre todos os compradores | `400` |
+| Comprador com vendas registradas não pode ser excluído | `400` |
+
+`PUT /compradores/{id}` exige todos os campos do cadastro.
+
+**Exemplos de resposta**
+
+`POST /compradores` (201)
+
+```json
+{ "id": 1, "nome": "Maria Souza", "cpf": "52998224725", "email": "maria@email.com", "criado_em": "2026-11-19T14:00:00Z" }
+```
+
+`POST /compradores` (400, CPF já cadastrado)
+
+```json
+{ "detail": "Já existe um comprador com este CPF." }
+```
+
+`POST /compradores` (422, CPF inválido)
+
+```json
+{ "detail": [{ "loc": ["body", "cpf"], "msg": "Value error, CPF inválido.", "...": "..." }] }
+```
+
+`DELETE /compradores/{id}` (400, comprador com vendas)
+
+```json
+{ "detail": "Não é possível excluir um comprador com vendas registradas." }
+```
+
+### Integração com o módulo de vendas
+
+O módulo de compradores (Card 3) foi entregue **antes** do módulo de vendas (Card 4, outro integrante).
+A regra "comprador com vendas não pode ser excluído" já está implementada, mas depende de um
+contrato com a tabela de vendas, que ainda não existe:
+
+| Item | Contrato |
+|------|----------|
+| Tabela | `vendas` |
+| Coluna | `comprador_id` (`INTEGER NOT NULL`), chave estrangeira para `compradores.id` |
+| Ordem das migrações | A migração de vendas deve ser executada **depois** da `003` (a FK depende da tabela `compradores`) |
+| Comportamento da FK | Sem `ON DELETE CASCADE`. Use o padrão (`NO ACTION`) ou `RESTRICT`, para o banco também barrar a exclusão |
+
+**Como o módulo de compradores usa o contrato**
+
+- `app/modules/compradores/repository.py`, função `possui_vendas`, consulta `vendas.comprador_id`
+  pelo nome da tabela, **sem importar nada de `app/modules/vendas`**. Se a tabela `vendas` ainda
+  não existir, considera que não há vendas e a exclusão é permitida.
+- Os nomes ficam nas constantes `TABELA_VENDAS` e `COLUNA_COMPRADOR_NA_VENDA`, no topo do
+  `repository.py`. Se o módulo de vendas usar outros nomes, basta ajustá-las.
+- Como segunda proteção, o `service.excluir` captura o `IntegrityError` da FK e responde `400` com a
+  mesma mensagem (caso uma venda seja registrada entre a checagem e a exclusão).
+- O módulo de compradores **não altera** nem cria nada de vendas.
+
+**O que o integrante de vendas precisa fazer**
+
+1. Criar a coluna `comprador_id` com `ForeignKey("compradores.id")` no model e na migração de vendas.
+2. Importar `Comprador` (de `app.modules.compradores.models`) apenas se precisar de `relationship`;
+   para a FK basta o nome da tabela.
+3. Validar, no cadastro da venda, que o comprador existe (resposta `404`/`400` conforme o padrão
+   do módulo de vendas).
+
+**Testes**
+
+O teste `test_nao_exclui_comprador_com_venda_registrada` usa a fixture `registrar_venda`
+(`tests/compradores/conftest.py`), que cria uma tabela `vendas` mínima (`id` e `comprador_id`) só
+para os testes. Depois de integrar o model `Venda`, substitua a tabela da fixture por ele e
+confirme que a suíte continua passando.
+
 ## Testes automatizados
 
 ### Estratégia
@@ -432,6 +515,8 @@ A documentação completa, com possibilidade de testar as requisições, está d
 | `auth_headers` | Header `Authorization` com um token válido do `usuario_cadastrado` |
 | `storage_fake` | Storage em memória que registra envios e remoções, usado no lugar do Supabase Storage |
 | `veiculo_cadastrado` | Veículo disponível de placa `ABC1D23` (em `tests/veiculos/conftest.py`) |
+| `comprador_cadastrado` | Comprador `Maria Souza`, CPF `52998224725` (em `tests/compradores/conftest.py`) |
+| `registrar_venda` | Função que registra uma venda para um comprador, usando uma tabela `vendas` mínima (em `tests/compradores/conftest.py`) |
 
 O `conftest.py` define uma `JWT_SECRET_KEY` própria para os testes antes de importar a API, e o
 `client` usa o `storage_fake`. Por isso os testes não dependem do `.env`, da chave real nem do
@@ -492,6 +577,27 @@ pytest tests/health/test_health.py::test_health_retorna_status_ok
 | veiculos | `test_remove_imagem_do_veiculo` | `DELETE /veiculos/{id}/imagem` | Status 204, `imagem_url` nula e arquivo removido |
 | veiculos | `test_excluir_veiculo_remove_a_imagem_do_storage` | `DELETE /veiculos/{id}` com imagem | Status 204 e arquivo removido |
 | veiculos | `test_envio_de_imagem_sem_storage_configurado_retorna_503` | Imagem sem `SUPABASE_URL` e chave | Status 503 e `Serviço de imagens indisponível.` |
+| compradores | `test_cadastra_comprador_valido` | `POST /compradores` com dados válidos | Status 201 e dados salvos |
+| compradores | `test_cadastra_comprador_com_cpf_formatado_e_salva_somente_digitos` | CPF `529.982.247-25` | Status 201 e CPF salvo como `52998224725` |
+| compradores | `test_email_e_salvo_em_minusculas_e_sem_espacos` | E-mail `  Maria@Email.COM ` | Status 201 e `maria@email.com` |
+| compradores | `test_rejeita_cpf_invalido` (8 casos) | CPF vazio, com dígito errado, curto, longo, com letras e repetido | Status 422 e `CPF inválido.` |
+| compradores | `test_rejeita_email_invalido` (6 casos) | E-mails vazio, sem `@`, sem domínio ou com espaço | Status 422 com erro no campo `email` |
+| compradores | `test_rejeita_cadastro_sem_campo_obrigatorio` (3 casos) | Cadastro sem `nome`, `cpf` ou `email` | Status 422 |
+| compradores | `test_rejeita_nome_vazio` | Nome só com espaços | Status 422 |
+| compradores | `test_rejeita_cpf_duplicado` | `POST /compradores` com CPF já cadastrado | Status 400 e mensagem de CPF duplicado |
+| compradores | `test_rejeita_cpf_duplicado_mesmo_com_formatacao_diferente` | CPF já cadastrado, enviado com pontuação | Status 400 e mensagem de CPF duplicado |
+| compradores | `test_lista_compradores` | `GET /compradores` com dois compradores | Status 200 e os dois em ordem |
+| compradores | `test_lista_vazia_quando_nao_ha_compradores` | `GET /compradores` sem cadastros | Status 200 e lista vazia |
+| compradores | `test_busca_comprador_por_id` | `GET /compradores/{id}` | Status 200 e os dados do comprador |
+| compradores | `test_comprador_inexistente_retorna_404` (3 casos) | `GET`, `PUT` e `DELETE` em `/compradores/999` | Status 404 e `Comprador não encontrado.` |
+| compradores | `test_atualiza_comprador` | `PUT /compradores/{id}` com nome, CPF e e-mail novos | Status 200 e dados atualizados |
+| compradores | `test_atualizacao_mantendo_o_proprio_cpf_nao_e_duplicidade` | `PUT` com o mesmo CPF do próprio comprador | Status 200 |
+| compradores | `test_atualizacao_rejeita_cpf_de_outro_comprador` | `PUT` com o CPF de outro comprador | Status 400 e mensagem de CPF duplicado |
+| compradores | `test_atualizacao_rejeita_cpf_invalido` | `PUT` com CPF inválido | Status 422 e `CPF inválido.` |
+| compradores | `test_exclui_comprador_sem_vendas` | `DELETE /compradores/{id}` | Status 204 e comprador não encontrado depois |
+| compradores | `test_nao_exclui_comprador_com_venda_registrada` | `DELETE` em comprador com venda | Status 400, mensagem de vendas e comprador mantido |
+| compradores | `test_exclui_comprador_sem_vendas_mesmo_que_outro_comprador_tenha` | `DELETE` em comprador sem venda, com venda de outro | Status 204 |
+| compradores | `test_rotas_de_compradores_exigem_autenticacao` (5 casos) | Todas as rotas de compradores sem token | Status 401 e `Não autenticado.` |
 
 ## Ambientes e deploy
 
