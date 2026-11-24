@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.vendas.conftest import dados_venda
+from tests.veiculos.conftest import dados_veiculo
 
 
 def test_venda_valida_marca_veiculo_como_vendido(
@@ -102,6 +103,41 @@ def test_crud_e_cancelamento_retorna_veiculo_a_disponivel(
 
     veiculo = client.get(f"/veiculos/{veiculo_disponivel['id']}", headers=auth_headers)
     assert veiculo.json()["status"] == "disponivel"
+
+
+def test_lista_todas_as_vendas(
+    client: TestClient,
+    auth_headers: dict,
+    veiculo_disponivel: dict,
+    comprador_cadastrado_para_venda: dict,
+):
+    segundo_veiculo = client.post(
+        "/veiculos",
+        json=dados_veiculo(placa="XYZ9876"),
+        headers=auth_headers,
+    )
+    assert segundo_veiculo.status_code == 201
+
+    primeira_venda = client.post(
+        "/vendas",
+        json=dados_venda(veiculo_disponivel["id"], comprador_cadastrado_para_venda["id"]),
+        headers=auth_headers,
+    )
+    segunda_venda = client.post(
+        "/vendas",
+        json=dados_venda(segundo_veiculo.json()["id"], comprador_cadastrado_para_venda["id"]),
+        headers=auth_headers,
+    )
+
+    response = client.get("/vendas", headers=auth_headers)
+
+    assert primeira_venda.status_code == 201
+    assert segunda_venda.status_code == 201
+    assert response.status_code == 200
+    assert [venda["id"] for venda in response.json()] == [
+        primeira_venda.json()["id"],
+        segunda_venda.json()["id"],
+    ]
 
 
 def test_venda_inexistente_retorna_404(client: TestClient, auth_headers: dict):
