@@ -5,7 +5,7 @@ from app.modules.vendas.models import Venda
 
 
 def listar(db: Session) -> list[Venda]:
-    return list(db.scalars(select(Venda).order_by(Venda.id).limit(1)))
+    return list(db.scalars(select(Venda).order_by(Venda.id)))
 
 
 def buscar_por_id(db: Session, venda_id: int) -> Venda | None:
