@@ -64,10 +64,10 @@ severinos-car/
 │   │   └── storage.py         Envio e remoção de arquivos no Supabase Storage
 │   ├── modules/
 │   │   ├── health/            Verificação da API e do banco
-│   │   ├── auth/              Card 1: login, proteção das rotas e criação de usuários
-│   │   ├── veiculos/          Card 2: CRUD de veículos e imagem
-│   │   ├── compradores/       Card 3
-│   │   └── vendas/            Card 4
+│   │   ├── auth/              Card 1: login, proteção das rotas
+│   │   ├── veiculos/          Card 2: CRUD de veículos
+│   │   ├── compradores/       Card 3: CRUD de compradores
+│   │   └── vendas/            Card 4: CRUD de vendas
 │   └── main.py                Criação da aplicação e registro das rotas
 ├── db/
 │   └── migrations/            Scripts SQL executados manualmente no Supabase
